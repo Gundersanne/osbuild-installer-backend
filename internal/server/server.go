@@ -4,6 +4,8 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -54,6 +56,60 @@ func (s *Server) Run(address string) {
 	}
 }
 
+func (s *Server) OsbuildClient() (*cloudapi.Client, error) {
+	socket, ok := os.LookupEnv("OSBUILD_SERVICE")
+	if !ok {
+		socket = "http://127.0.0.1:80"
+	}
+	s.logger.Infoln("Creating osbuildclient with socket %s", socket)
+	return cloudapi.NewClient(socket, ConfigureClient)
+}
+
+func ConfigureClient(client *cloudapi.Client) error {
+	// set up client certificate authentication
+	if (strings.HasPrefix(client.Server, "https")) {
+		certFile, ok := os.LookupEnv("OSBUILD_CERT_PATH")
+		if !ok {
+			return fmt.Errorf("Couldn't find cert path, is OSBUILD_CERT_PATH set?")
+		}
+		keyFile, ok := os.LookupEnv("OSBUILD_KEY_PATH")
+		if !ok {
+			return fmt.Errorf("Couldn't find key path, is OSBUILD_KEY_PATH set?")
+		}
+		caFile, hasCA := os.LookupEnv("OSBUILD_CA_PATH")
+
+		// Load client cert
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return err
+		}
+
+		var tlsConfig *tls.Config
+		if hasCA {
+			caCert, err := ioutil.ReadFile(caFile)
+			if err != nil {
+				return err
+			}
+			caCertPool := x509.NewCertPool()
+			caCertPool.AppendCertsFromPEM(caCert)
+			tlsConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				RootCAs:      caCertPool,
+			}
+		} else {
+			tlsConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				InsecureSkipVerify: true,
+			}
+		}
+
+		tlsConfig.BuildNameToCertificate()
+		transport := &http.Transport{TLSClientConfig: tlsConfig}
+		client.Client = &http.Client{Transport: transport}
+	}
+	return nil
+}
+
 func (h *Handlers) GetVersion(ctx echo.Context) error {
 	spec, err := GetSwagger()
 	if err != nil {
@@ -89,15 +145,23 @@ func (h *Handlers) GetArchitectures(ctx echo.Context, distribution string) error
 }
 
 func (h *Handlers) GetComposeStatus(ctx echo.Context, composeId string) error {
-	socket, ok := os.LookupEnv("OSBUILD_SERVICE")
-	if !ok {
-		socket = "http://127.0.0.1:80"
-	}
-	endpoint := "compose/" + composeId
-
-	resp, err := http.Get(fmt.Sprintf("%s/%s", socket, endpoint))
+	client, err := h.server.OsbuildClient()
 	if err != nil {
 		return err
+	}
+
+
+	resp, err := client.ComposeStatus(context.Background(), composeId)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode == 404 {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("%s", body))
 	}
 
 	var composeStatus ComposeStatus
@@ -109,11 +173,6 @@ func (h *Handlers) GetComposeStatus(ctx echo.Context, composeId string) error {
 }
 
 func (h *Handlers) ComposeImage(ctx echo.Context) error {
-	socket, ok := os.LookupEnv("OSBUILD_SERVICE")
-	if !ok {
-		socket = "http://127.0.0.1:80/"
-	}
-
 	composeRequest := &cloudapi.ComposeJSONRequestBody{}
 	err := ctx.Bind(composeRequest)
 	if err != nil {
@@ -135,7 +194,7 @@ func (h *Handlers) ComposeImage(ctx echo.Context) error {
 	}
 	composeRequest.ImageRequests[0].Repositories = repositories
 
-	client, err := cloudapi.NewClient(socket)
+	client, err := h.server.OsbuildClient()
 	if err != nil {
 		return err
 	}
@@ -228,7 +287,7 @@ func (s *Server) HTTPErrorHandler(err error, c echo.Context) {
 
 	// Only log internal errors
 	if he.Code == http.StatusInternalServerError {
-		s.logger.Errorln(fmt.Sprintf("Internal error %v: %v", he.Code, he.Message))
+		s.logger.Errorln(fmt.Sprintf("Internal error %v: %v, %v", he.Code, he.Message, err))
 
 	}
 
