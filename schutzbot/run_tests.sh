@@ -37,6 +37,13 @@ run_test_case () {
 # Check if iamge-builder-tests is installed.
 sudo dnf -y install image-builder-tests
 
+# The integration test also runs a test against an image-builder container
+# IMAGES
+sudo podman run -d --pull=never --security-opt "label=disable" --net=host \
+     -e LISTEN_ADDRESS=localhost:8087 \
+     image-builder
+
+
 # Change to the working directory.
 cd $WORKING_DIRECTORY
 

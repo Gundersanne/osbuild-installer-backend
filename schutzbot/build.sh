@@ -54,3 +54,11 @@ sudo mock -v -r $MOCK_CONFIG --resultdir $REPO_DIR --with=tests \
     rpmbuild/SRPMS/*.src.rpm
 
 sudo dnf localinstall -y $REPO_DIR/*x86_64.rpm
+
+# Build the container
+sudo setenforce 0 # todo
+sudo podman build --security-opt "label=disable" -t image-builder -f distribution/Dockerfile-ubi .
+sudo setenforce 1
+
+# Install osbuild-composer
+sudo dnf install -y osbuild-composer

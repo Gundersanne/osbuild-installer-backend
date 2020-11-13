@@ -21,7 +21,7 @@ type X86_64 struct {
 }
 
 func ReadDistributions(distro string) ([]Distribution, error) {
-	confPaths := [2]string{"/usr/share/image-builder/distributions", "./distributions"}
+	confPaths := [2]string{"/usr/share/image-builder/distributions", "/app/distributions"}
 	var distributions []Distribution
 
 	var err error

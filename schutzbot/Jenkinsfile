@@ -38,7 +38,7 @@ pipeline {
                     steps {
                         sh "schutzbot/ci_details.sh"
                         retry(3) {
-                            sh "schutzbot/mockbuild.sh"
+                            sh "schutzbot/build.sh"
                         }
                         sh "schutzbot/run_tests.sh"
                     }
@@ -51,7 +51,7 @@ pipeline {
                     steps {
                         sh "schutzbot/ci_details.sh"
                         retry(3) {
-                            sh "schutzbot/mockbuild.sh"
+                            sh "schutzbot/build.sh"
                         }
                         sh "schutzbot/run_tests.sh"
                     }
