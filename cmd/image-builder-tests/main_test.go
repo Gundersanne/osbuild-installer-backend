@@ -3,10 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TODO build requetss from distro endpoints
+// // TODO build requetss from distro endpoints
 // composeRequest := cloudapi.ComposeRequest{
 // 	Distribution: "rhel-8",
 // 	ImageRequests: []cloudapi.ImageRequest{
@@ -77,39 +78,77 @@ func RunTestWithClient(t *testing.T, ib string)  {
 			server.ImageRequest{
 				Architecture: (*archResp.JSON200)[0].Arch,
 				ImageType: (*archResp.JSON200)[0].ImageTypes[0],
+				UploadRequests: &[]server.UploadRequest{
+					{
+						Type: "aws",
+						Options: server.AWSUploadRequestOptions{
+							Ec2: server.AWSUploadRequestOptionsEc2{
+								AccessKeyId: "invalid",
+								SecretAccessKey: "invalid",
+							},
+							S3: server.AWSUploadRequestOptionsS3{
+								AccessKeyId: "invalid",
+								SecretAccessKey: "invalid",
+								Bucket: "invalid",
+							},
+							Region: "invalid",
+						},
+					},
+				},
 			},
 		},
 	}
 
-	b, err := json.Marshal(composeRequest)
-	require.NoError(t, err)
-	fmt.Println(fmt.Sprintf("AAAAAAAAAA %v", string(b)))
 	composeResp, err := client.ComposeImageWithResponse(ctx, composeRequest)
 	require.NoError(t, err)
-	fmt.Println(fmt.Sprintf("BBBBBBB %v", composeResp))
+	require.Equal(t, http.StatusCreated, composeResp.StatusCode(), "Error: got non-201 status. Full response: %s", composeResp.Body)
+	require.NotNil(t, composeResp.JSON201)
+	id := composeResp.JSON201.Id
+
+	statusResp, err := client.GetComposeStatusWithResponse(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, composeResp.StatusCode(), "Error: got non-201 status. Full response: %s", composeResp.Body)
+	require.NotEmpty(t, statusResp.JSON200)
+	require.Equal(t, statusResp.JSON200.Status, "WAITING")
 
 	// Check if we get 404 without the identity header
 	client, err = server.NewClientWithResponses(ib)
 	versionResp, err := client.GetVersionWithResponse(ctx)
 	require.NoError(t, err)
 	require.Equalf(t, http.StatusNotFound, versionResp.StatusCode(), "Error: got non-404 status. Full response: %s", versionResp.Body)
-
 }
 
 func TestImageBuilder(t *testing.T) {
 	// allow to run against existing instance
 	// run image builder
+
+	/* OsbuildURL      string  `env:"OSBUILD_URL"`
+	   OsbuildCert     string  `env:"OSBUILD_CERT_PATH"`
+	   OsbuildKey      string  `env:"OSBUILD_KEY_PATH"`
+	   OsbuildCA       string  `env:"OSBUILD_CA_PATH"` */
 	cmd := exec.Command("/usr/libexec/image-builder/image-builder")
+	cmd.Env = append(os.Environ(),
+		"OSBUILD_URL=https://localhost:443/api/composer/v1",
+		"OSBUILD_CA_PATH=/etc/osbuild-composer/ca-crt.pem",
+		"OSBUILD_CERT_PATH=/etc/osbuild-composer/client-crt.pem",
+		"OSBUILD_KEY_PATH=/etc/osbuild-composer/client-key.pem",
+	)
+
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
 	err := cmd.Start()
 	require.NoError(t, err)
-	defer cmd.Process.Kill()
+	defer func() {
+		fmt.Println("OUT: ", buf.String())
+		cmd.Process.Kill()
+	}()
 
 	RunTestWithClient(t, "http://127.0.0.1:8086/api/image-builder/v1")
 	RunTestWithClient(t, "http://127.0.0.1:8086/api/image-builder/v1.0")
 }
 
-// Same test as above but against existing contain on localhost:8087
-func TestImageBuilderContainer(t *testing.T) {
-	RunTestWithClient(t, "http://127.0.0.1:8087/api/image-builder/v1")
-	RunTestWithClient(t, "http://127.0.0.1:8086/api/image-builder/v1.0")
-}
+// // Same test as above but against existing contain on localhost:8087
+// func TestImageBuilderContainer(t *testing.T) {
+// 	RunTestWithClient(t, "http://127.0.0.1:8087/api/image-builder/v1")
+// 	RunTestWithClient(t, "http://127.0.0.1:8087/api/image-builder/v1.0")
+// }

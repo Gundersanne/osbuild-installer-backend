@@ -120,6 +120,14 @@ objects:
                 secretKeyRef:
                   key: aws_region
                   name: image-builder-cloudwatch
+          volumeMounts:
+            - name: secrets
+              mountPath: "/secrets"
+        volumes:
+        - name: secrets
+          secret:
+            secretName: image-builder-secrets
+
 
 # Set up a service within the namespace for the backend.
 - apiVersion: v1

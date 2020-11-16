@@ -4,8 +4,6 @@ package server
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -24,28 +22,29 @@ import (
 type Server struct {
 	logger *logrus.Logger
 	echo   *echo.Echo
+	client *cloudapi.OsbuildClient
 }
 
 type Handlers struct {
 	server *Server
 }
 
-func NewServer(logger *logrus.Logger) *Server {
+func NewServer(logger *logrus.Logger, client *cloudapi.OsbuildClient) *Server {
 	spec, err := GetSwagger()
 	if err != nil {
 		panic(err)
 	}
 	majorVersion := strings.Split(spec.Info.Version, ".")[0]
 
-	s := Server{logger, echo.New()}
+	s := Server{logger, echo.New(), client}
 	var h Handlers
+	h.server = &s
 	s.echo.Binder = binder{}
 	s.echo.HTTPErrorHandler = s.HTTPErrorHandler
 	s.echo.Pre(VerifyIdentityHeader)
 	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), majorVersion)), &h)
 	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), spec.Info.Version)), &h)
 	return &s
-
 }
 
 func (s *Server) Run(address string) {
@@ -56,65 +55,12 @@ func (s *Server) Run(address string) {
 	}
 }
 
-func (s *Server) OsbuildClient() (*cloudapi.Client, error) {
-	socket, ok := os.LookupEnv("OSBUILD_SERVICE")
-	if !ok {
-		socket = "http://127.0.0.1:80"
-	}
-	s.logger.Infoln("Creating osbuildclient with socket %s", socket)
-	return cloudapi.NewClient(socket, ConfigureClient)
-}
-
-func ConfigureClient(client *cloudapi.Client) error {
-	// set up client certificate authentication
-	if (strings.HasPrefix(client.Server, "https")) {
-		certFile, ok := os.LookupEnv("OSBUILD_CERT_PATH")
-		if !ok {
-			return fmt.Errorf("Couldn't find cert path, is OSBUILD_CERT_PATH set?")
-		}
-		keyFile, ok := os.LookupEnv("OSBUILD_KEY_PATH")
-		if !ok {
-			return fmt.Errorf("Couldn't find key path, is OSBUILD_KEY_PATH set?")
-		}
-		caFile, hasCA := os.LookupEnv("OSBUILD_CA_PATH")
-
-		// Load client cert
-		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-		if err != nil {
-			return err
-		}
-
-		var tlsConfig *tls.Config
-		if hasCA {
-			caCert, err := ioutil.ReadFile(caFile)
-			if err != nil {
-				return err
-			}
-			caCertPool := x509.NewCertPool()
-			caCertPool.AppendCertsFromPEM(caCert)
-			tlsConfig = &tls.Config{
-				Certificates: []tls.Certificate{cert},
-				RootCAs:      caCertPool,
-			}
-		} else {
-			tlsConfig = &tls.Config{
-				Certificates: []tls.Certificate{cert},
-				InsecureSkipVerify: true,
-			}
-		}
-
-		tlsConfig.BuildNameToCertificate()
-		transport := &http.Transport{TLSClientConfig: tlsConfig}
-		client.Client = &http.Client{Transport: transport}
-	}
-	return nil
-}
-
 func (h *Handlers) GetVersion(ctx echo.Context) error {
 	spec, err := GetSwagger()
 	if err != nil {
 		return err
 	}
+	h.server.logger.Infoln("GETTING VERSIONNONON")
 	version := Version{spec.Info.Version}
 	return ctx.JSON(http.StatusOK, version)
 }
@@ -145,7 +91,7 @@ func (h *Handlers) GetArchitectures(ctx echo.Context, distribution string) error
 }
 
 func (h *Handlers) GetComposeStatus(ctx echo.Context, composeId string) error {
-	client, err := h.server.OsbuildClient()
+	client, err := h.server.client.Get()
 	if err != nil {
 		return err
 	}
@@ -173,6 +119,7 @@ func (h *Handlers) GetComposeStatus(ctx echo.Context, composeId string) error {
 }
 
 func (h *Handlers) ComposeImage(ctx echo.Context) error {
+	h.server.logger.Infoln("compose imagtions")
 	composeRequest := &cloudapi.ComposeJSONRequestBody{}
 	err := ctx.Bind(composeRequest)
 	if err != nil {
@@ -194,7 +141,7 @@ func (h *Handlers) ComposeImage(ctx echo.Context) error {
 	}
 	composeRequest.ImageRequests[0].Repositories = repositories
 
-	client, err := h.server.OsbuildClient()
+	client, err := h.server.client.Get()
 	if err != nil {
 		return err
 	}
@@ -208,7 +155,7 @@ func (h *Handlers) ComposeImage(ctx echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(resp.StatusCode, "Failed posting compose request to osbuild-composer")
 		}
-		return echo.NewHTTPError(resp.StatusCode, fmt.Sprintf("Failed posting compose request to osbuild-composer: %v", body))
+		return echo.NewHTTPError(resp.StatusCode, fmt.Sprintf("Failed posting compose request to osbuild-composer: %s", body))
 	}
 
 	var composeResponse ComposeResponse
@@ -216,6 +163,7 @@ func (h *Handlers) ComposeImage(ctx echo.Context) error {
 	if err != nil {
 		return err
 	}
+	// TODO statuscreated?
 	return ctx.JSON(http.StatusCreated, composeResponse)
 }
 
@@ -246,7 +194,6 @@ func (b binder) Bind(i interface{}, ctx echo.Context) error {
 
 	err := json.NewDecoder(request.Body).Decode(i)
 	if err != nil {
-		panic("Failed to write response")
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("cannot parse request body: %v", err))
 	}
 

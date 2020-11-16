@@ -62,3 +62,4 @@ sudo setenforce 1
 
 # Install osbuild-composer
 sudo dnf install -y osbuild-composer
+sudo systemctl enable --now osbuild-composer.service
