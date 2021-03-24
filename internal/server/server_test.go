@@ -62,7 +62,7 @@ func TestWithoutOsbuildComposerBackend(t *testing.T) {
 	})
 
 	t.Run("GetVersion", func(t *testing.T) {
-		response, body := tutils.GetResponseBody(t, "http://localhost:8086/api/image-builder/v1/version", &tutils.AuthString0)
+		response, body := tutils.GetResponseBody(t, "http://localhost:8086/api/image-builder/v1/version", &tutils.AuthString1)
 		require.Equal(t, 200, response.StatusCode)
 
 		var result Version
@@ -524,6 +524,32 @@ func TestReadinessProbeReady(t *testing.T) {
 	response, body := tutils.GetResponseBody(t, "http://localhost:8086/ready", &tutils.AuthString0)
 	require.Equal(t, 200, response.StatusCode)
 	require.Contains(t, body, "{\"readiness\":\"ready\"}")
+}
+
+func TestInvalidRequest(t *testing.T) {
+	// simulate osbuild-composer API
+	srv := startServer(t, "http://example.com", "*")
+	defer func() {
+		err := srv.echo.Server.Shutdown(context.Background())
+		require.NoError(t, err)
+	}()
+
+	t.Run("InvalidRequestError", func(t *testing.T) {
+		payload := ComposeRequest{
+			Customizations: nil,
+			Distribution:   "fedora-33",
+			ImageRequests: []ImageRequest{
+				ImageRequest{
+					Architecture:  "x86_64",
+					ImageType:     "qcow2",
+					UploadRequest: UploadRequest{},
+				},
+			},
+		}
+		response, body := tutils.PostResponseBody(t, "http://localhost:8086/api/image-builder/v1/compose", payload)
+		require.Equal(t, 400, response.StatusCode)
+		require.Contains(t, body, "property type is missing")
+	})
 }
 
 func TestMetrics(t *testing.T) {

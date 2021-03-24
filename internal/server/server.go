@@ -14,6 +14,7 @@ import (
 	"github.com/osbuild/image-builder/internal/cloudapi"
 	"github.com/osbuild/image-builder/internal/db"
 
+	"github.com/deepmap/oapi-codegen/pkg/middleware"
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/labstack/echo/v4"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -83,8 +84,8 @@ func NewServer(logger *logrus.Logger, client cloudapi.OsbuildClient, dbase db.DB
 	h.server = &s
 	s.echo.Binder = binder{}
 	s.echo.HTTPErrorHandler = s.HTTPErrorHandler
-	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), majorVersion), s.VerifyIdentityHeader, s.PrometheusMW), &h)
-	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), spec.Info.Version), s.VerifyIdentityHeader, s.PrometheusMW), &h)
+	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), majorVersion), s.VerifyIdentityHeader, s.PrometheusMW, middleware.OapiRequestValidator(spec)), &h)
+	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), spec.Info.Version), s.VerifyIdentityHeader, s.PrometheusMW, middleware.OapiRequestValidator(spec)), &h)
 
 	/* Used for the livenessProbe */
 	s.echo.GET("/status", func(c echo.Context) error {
