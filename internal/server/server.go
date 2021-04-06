@@ -2,6 +2,9 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,8 +17,9 @@ import (
 	"github.com/osbuild/image-builder/internal/cloudapi"
 	"github.com/osbuild/image-builder/internal/db"
 
-	"github.com/deepmap/oapi-codegen/pkg/middleware"
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/getkin/kin-openapi/routers"
 	"github.com/labstack/echo/v4"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
@@ -84,8 +88,8 @@ func NewServer(logger *logrus.Logger, client cloudapi.OsbuildClient, dbase db.DB
 	h.server = &s
 	s.echo.Binder = binder{}
 	s.echo.HTTPErrorHandler = s.HTTPErrorHandler
-	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), majorVersion), s.VerifyIdentityHeader, s.PrometheusMW, middleware.OapiRequestValidator(spec)), &h)
-	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), spec.Info.Version), s.VerifyIdentityHeader, s.PrometheusMW, middleware.OapiRequestValidator(spec)), &h)
+	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), majorVersion), s.VerifyIdentityHeader, s.PrometheusMW), &h)
+	RegisterHandlers(s.echo.Group(fmt.Sprintf("%s/v%s", RoutePrefix(), spec.Info.Version), s.VerifyIdentityHeader, s.PrometheusMW), &h)
 
 	/* Used for the livenessProbe */
 	s.echo.GET("/status", func(c echo.Context) error {
@@ -552,6 +556,69 @@ func (s *Server) VerifyIdentityHeader(nextHandler echo.HandlerFunc) echo.Handler
 	return func(ctx echo.Context) error {
 		request := ctx.Request()
 
+		// Decode the b64 spec
+		ctx2 := context.Background()
+		zipped, err := base64.StdEncoding.DecodeString(strings.Join(swaggerSpec, ""))
+		if err != nil {
+			return fmt.Errorf("error base64 decoding spec: %s", err)
+		}
+		zr, err := gzip.NewReader(bytes.NewReader(zipped))
+		if err != nil {
+			return fmt.Errorf("error decompressing spec: %s", err)
+		}
+		var buf bytes.Buffer
+		_, err = buf.ReadFrom(zr)
+		if err != nil {
+			return fmt.Errorf("error decompressing spec: %s", err)
+		}
+		doc, err := openapi3.NewSwaggerLoader().LoadSwaggerFromData(buf.Bytes())
+		if err != nil {
+			panic(err)
+		}
+		err = doc.Validate(ctx2)
+		if err != nil {
+			panic(err)
+		}
+
+		// TODO because we add the echo.Groups this is going to be hard to use
+		// router, err := gorillamux.NewRouter(doc)
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// route, pathParams, err := router.FindRoute(request)
+
+		path := fmt.Sprintf("/%s", strings.Join(strings.Split(strings.TrimLeft(ctx.Path(), "/"), "/")[3:], "/"))
+		pathParams := map[string]string{}
+		for i, p := range ctx.ParamNames() {
+			pathParams[p] = ctx.ParamValues()[i]
+
+			// for each path parameter
+			pathParamName := fmt.Sprintf("/:%s", p)
+			path = strings.Replace(path, pathParamName, fmt.Sprintf("/{%s}", p), 1)
+		}
+
+		// remove the prefix `/api/image-builder/v1(.0)`
+		s.logger.Infoln("PATH", path, doc.Paths, pathParams)
+
+		route := &routers.Route{
+			Swagger:   doc,
+			Path:      path,
+			Method:    request.Method,
+			PathItem:  doc.Paths[path],
+			Operation: doc.Paths[path].GetOperation(request.Method),
+		}
+
+		requestValidationInput := &openapi3filter.RequestValidationInput{
+			Request:    request,
+			PathParams: pathParams,
+			Route:      route,
+		}
+
+		// actual validation
+		if err := openapi3filter.ValidateRequest(ctx2, requestValidationInput); err != nil {
+			panic(err)
+		}
+
 		idHeaderB64 := request.Header["X-Rh-Identity"]
 		if len(idHeaderB64) != 1 {
 			return echo.NewHTTPError(http.StatusNotFound, "Auth header is not present")
@@ -568,7 +635,7 @@ func (s *Server) VerifyIdentityHeader(nextHandler echo.HandlerFunc) echo.Handler
 			return echo.NewHTTPError(http.StatusNotFound, "Auth header has incorrect format")
 		}
 
-		s.logger.Infof("Verify identity for user with internal org_id '%v' in header '%v' \n", idHeader.Identity.Internal.OrgId, idHeaderB64[0])
+		//		s.logger.Infof("Verify identity for user with internal org_id '%v' in header '%v' \n", idHeader.Identity.Internal.OrgId, idHeaderB64[0])
 
 		if !orgIdAllowed(idHeader, s.orgIds) {
 			return echo.NewHTTPError(http.StatusNotFound, "Organization not allowed")
@@ -597,6 +664,7 @@ func (s *Server) HTTPErrorHandler(err error, c echo.Context) {
 	}
 
 	// Only log internal errors
+	s.logger.Errorln(err)
 	if he.Code == http.StatusInternalServerError {
 		s.logger.Errorln(fmt.Sprintf("Internal error %v: %v, %v", he.Code, he.Message, err))
 		serverErrors.WithLabelValues(c.Path()).Inc()

@@ -62,7 +62,7 @@ func TestWithoutOsbuildComposerBackend(t *testing.T) {
 	})
 
 	t.Run("GetVersion", func(t *testing.T) {
-		response, body := tutils.GetResponseBody(t, "http://localhost:8086/api/image-builder/v1/version", &tutils.AuthString1)
+		response, body := tutils.GetResponseBody(t, "http://localhost:8086/api/image-builder/v1/version", &tutils.AuthString0)
 		require.Equal(t, 200, response.StatusCode)
 
 		var result Version

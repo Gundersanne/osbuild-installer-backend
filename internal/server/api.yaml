@@ -8,6 +8,16 @@ info:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0.html
 
+servers: []
+# - url: "http://localhost:8086/"
+#   description: Running locally
+# - url: "http://127.0.0.1:8086/api/image-builder/v1/"
+#   description: Running locally
+# - url: "http://localhost:8086/api/image-builder/v1.0/"
+#   description: Running locally
+# - url: "http://127.0.0.1:8086/api/image-builder/v1.0/"
+#   description: Running locally
+
 paths:
   /version:
     get:
@@ -386,7 +396,7 @@ components:
         type:
           $ref: '#/components/schemas/UploadTypes'
         options:
-          oneOf:
+          anyOf:
             - $ref: '#/components/schemas/AWSUploadRequestOptions'
             - $ref: '#/components/schemas/GCPUploadRequestOptions'
             - $ref: '#/components/schemas/AzureUploadRequestOptions'
